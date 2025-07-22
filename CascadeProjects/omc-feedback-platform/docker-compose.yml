@@ -1,0 +1,222 @@
+version: '3.8'
+
+services:
+  # PostgreSQL Database
+  postgres:
+    image: postgres:14
+    container_name: omc-postgres
+    environment:
+      POSTGRES_USER: omcuser
+      POSTGRES_PASSWORD: omcpassword
+      POSTGRES_DB: omcfeedback
+    ports:
+      - "5432:5432"
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+    networks:
+      - omc-network
+
+  # MongoDB for Analytics
+  mongodb:
+    image: mongo:5
+    container_name: omc-mongodb
+    environment:
+      MONGO_INITDB_ROOT_USERNAME: omcuser
+      MONGO_INITDB_ROOT_PASSWORD: omcpassword
+    ports:
+      - "27017:27017"
+    volumes:
+      - mongo_data:/data/db
+    networks:
+      - omc-network
+
+  # Redis Cache
+  redis:
+    image: redis:6
+    container_name: omc-redis
+    ports:
+      - "6379:6379"
+    networks:
+      - omc-network
+
+  # RabbitMQ Message Queue
+  rabbitmq:
+    image: rabbitmq:3-management
+    container_name: omc-rabbitmq
+    environment:
+      RABBITMQ_DEFAULT_USER: omcuser
+      RABBITMQ_DEFAULT_PASS: omcpassword
+    ports:
+      - "5672:5672"
+      - "15672:15672"
+    networks:
+      - omc-network
+
+  # User Service
+  user-service:
+    build:
+      context: ./services/user-service
+      dockerfile: Dockerfile
+    container_name: omc-user-service
+    environment:
+      - NODE_ENV=development
+      - PORT=3001
+      - DB_HOST=postgres
+      - DB_PORT=5432
+      - DB_USER=omcuser
+      - DB_PASSWORD=omcpassword
+      - DB_NAME=omcfeedback
+      - REDIS_HOST=redis
+      - REDIS_PORT=6379
+    ports:
+      - "3001:3001"
+    depends_on:
+      - postgres
+      - redis
+    networks:
+      - omc-network
+
+  # Feedback Service
+  feedback-service:
+    build:
+      context: ./services/feedback-service
+      dockerfile: Dockerfile
+    container_name: omc-feedback-service
+    environment:
+      - NODE_ENV=development
+      - PORT=3002
+      - DB_HOST=postgres
+      - DB_PORT=5432
+      - DB_USER=omcuser
+      - DB_PASSWORD=omcpassword
+      - DB_NAME=omcfeedback
+      - REDIS_HOST=redis
+      - REDIS_PORT=6379
+    ports:
+      - "3002:3002"
+    depends_on:
+      - postgres
+      - redis
+    networks:
+      - omc-network
+
+  # Notification Service
+  notification-service:
+    build:
+      context: ./services/notification-service
+      dockerfile: Dockerfile
+    container_name: omc-notification-service
+    environment:
+      - NODE_ENV=development
+      - PORT=3003
+      - DB_HOST=postgres
+      - DB_PORT=5432
+      - DB_USER=omcuser
+      - DB_PASSWORD=omcpassword
+      - DB_NAME=omcfeedback
+      - REDIS_HOST=redis
+      - REDIS_PORT=6379
+    ports:
+      - "3003:3003"
+    depends_on:
+      - postgres
+      - redis
+    networks:
+      - omc-network
+
+  # Analytics Service
+  analytics-service:
+    build:
+      context: ./services/analytics-service
+      dockerfile: Dockerfile
+    container_name: omc-analytics-service
+    environment:
+      - NODE_ENV=development
+      - PORT=3004
+      - MONGODB_URI=mongodb://omcuser:omcpassword@mongodb:27017/omc_analytics?authSource=admin
+      - JWT_SECRET=omc-analytics-platform-secret-key
+      - RABBITMQ_URL=amqp://omcuser:omcpassword@rabbitmq:5672
+      - RABBITMQ_EXCHANGE=omc_events
+      - RABBITMQ_QUEUE=analytics
+      - REDIS_URL=redis://redis:6379
+      - REDIS_TTL=86400
+      - FEEDBACK_SERVICE_URL=http://feedback-service:3002/api
+      - USER_SERVICE_URL=http://user-service:3001/api
+      - NOTIFICATION_SERVICE_URL=http://notification-service:3003/api
+      - DAILY_AGGREGATION_SCHEDULE="0 0 * * *"
+      - WEEKLY_AGGREGATION_SCHEDULE="0 0 * * 0"
+      - MONTHLY_AGGREGATION_SCHEDULE="0 0 1 * *"
+      - RUN_INITIAL_AGGREGATION=false
+      - LOG_LEVEL=info
+    ports:
+      - "3004:3004"
+    depends_on:
+      - mongodb
+      - redis
+      - rabbitmq
+      - user-service
+      - feedback-service
+      - notification-service
+    networks:
+      - omc-network
+
+  # Web Portal
+  web-portal:
+    build:
+      context: ./web/portal
+      dockerfile: Dockerfile
+    container_name: omc-web-portal
+    environment:
+      - NODE_ENV=development
+      - PORT=3000
+      - API_URL=http://api-gateway:3000
+    ports:
+      - "3000:3000"
+    networks:
+      - omc-network
+
+  # Admin Dashboard
+  admin-dashboard:
+    build:
+      context: ./web/admin
+      dockerfile: Dockerfile
+    container_name: omc-admin-dashboard
+    environment:
+      - NODE_ENV=development
+      - PORT=3010
+      - API_URL=http://api-gateway:3000
+    ports:
+      - "3010:3010"
+    networks:
+      - omc-network
+
+  # API Gateway
+  api-gateway:
+    build:
+      context: ./services/api-gateway
+      dockerfile: Dockerfile
+    container_name: omc-api-gateway
+    environment:
+      - NODE_ENV=development
+      - PORT=4000
+      - USER_SERVICE_URL=http://user-service:3001
+      - FEEDBACK_SERVICE_URL=http://feedback-service:3002
+      - NOTIFICATION_SERVICE_URL=http://notification-service:3003
+      - ANALYTICS_SERVICE_URL=http://analytics-service:3004
+    ports:
+      - "4000:4000"
+    depends_on:
+      - user-service
+      - feedback-service
+      - notification-service
+      - analytics-service
+    networks:
+      - omc-network
+
+networks:
+  omc-network:
+    driver: bridge
+
+volumes:
+  postgres_data:
+  mongo_data:
